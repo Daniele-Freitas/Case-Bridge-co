@@ -20,7 +20,54 @@ Este repositório implementa o fluxo completo do case:
 - Windows + PowerShell
 - Python 3.11+
 - Dependências do Python: ver `requirements.txt`
-- Para resumir e-mails (Etapa 3.3/3.4): **Gemini API Key** via `GEMINI_API_KEY`
+- **Para resumir e-mails (Etapa 3.3/3.4):** API Key do Google Gemini (defina via variável de ambiente `GEMINI_API_KEY`)
+
+## Como obter a Gemini API Key
+
+1. Acesse [Google AI Studio](https://aistudio.google.com/app/apikey)
+2. Clique em "Create API Key"
+3. Copie a chave gerada
+
+## Como definir GEMINI_API_KEY
+
+### Opção 1: Terminal (válido só para aquele terminal)
+
+```powershell
+$env:GEMINI_API_KEY="SUA_KEY_AQUI"
+```
+
+Depois rode o comando da CLI normalmente. A chave será perdida ao fechar o terminal.
+
+### Opção 2: Arquivo `.env` (persistente)
+
+Crie um arquivo `.env` na raiz do projeto:
+
+```
+GEMINI_API_KEY=SUA_KEY_AQUI
+```
+
+Depois use este script em PowerShell para carregar automaticamente:
+
+```powershell
+if (Test-Path ".env") {
+    Get-Content ".env" | ForEach-Object {
+        if ($_ -match '^\s*([^=#]+)\s*=\s*(.+)$') {
+            [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
+        }
+    }
+}
+```
+
+Depois rode o comando da CLI. A chave será carregada do `.env` **apenas naquele terminal**.
+
+### Opção 3: Variável de ambiente global (Windows permanente)
+
+Abra **Propriedades do Sistema** → **Variáveis de Ambiente** e crie:
+
+- **Nome:** `GEMINI_API_KEY`
+- **Valor:** `SUA_KEY_AQUI`
+
+A chave será disponível em todos os terminais novos.
 
 ## Instalação
 
@@ -35,6 +82,8 @@ python -m pip install -r requirements.txt
 ```powershell
 \.venv\Scripts\python.exe -m case_bridge
 ```
+
+**Nota:** A CLI não pede nenhuma entrada durante a execução. Se uma etapa precisar da `GEMINI_API_KEY`, ela deve estar **já definida no terminal antes** de rodar o comando.
 
 ## Como rodar (modo por argumentos)
 
@@ -54,13 +103,7 @@ Usa por padrão os arquivos em `data/case/vendas/`.
 
 ### Etapa 3.3 — resumir e-mails (requer Gemini)
 
-Defina a variável de ambiente (somente no terminal atual):
-
-```powershell
-$env:GEMINI_API_KEY="SUA_KEY_AQUI"
-```
-
-E rode:
+A chave `GEMINI_API_KEY` já deve estar definida (ver seção acima). Depois rode:
 
 ```powershell
 \.venv\Scripts\python.exe -m case_bridge emails

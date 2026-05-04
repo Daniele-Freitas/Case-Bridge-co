@@ -10,7 +10,6 @@ import requests
 
 from case_bridge.errors import ConfigError, GeminiError
 
-
 @dataclass
 class GeminiOptions:
     base_url: str = "https://generativelanguage.googleapis.com/v1beta"
