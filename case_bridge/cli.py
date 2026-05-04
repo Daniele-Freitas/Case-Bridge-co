@@ -59,7 +59,7 @@ def cmd_precos(args: argparse.Namespace) -> int:
     out_path = Path(args.out)
     _ensure_parent(out_path)
     df.to_csv(out_path, index=False)
-    print(f"OK: {len(df)} linhas salvas em {out_path}")
+    print(f"OK [Etapa 1]: {len(df)} linhas salvas em {out_path}")
     return 0
 
 
@@ -111,7 +111,7 @@ def cmd_vendas(args: argparse.Namespace) -> int:
 
     _ensure_parent(out_path)
     df.to_csv(out_path, index=False)
-    print(f"OK: {len(df)} linhas salvas em {out_path}")
+    print(f"OK [Etapa 2]: {len(df)} linhas salvas em {out_path}")
     return 0
 
 
@@ -162,7 +162,7 @@ def cmd_emails(args: argparse.Namespace) -> int:
 
     _ensure_parent(out_path)
     df.to_csv(out_path, index=False)
-    print(f"OK: {len(df)} linhas salvas em {out_path}")
+    print(f"OK [Etapa 3.3]: {len(df)} linhas salvas em {out_path}")
     return 0
 
 
@@ -187,7 +187,7 @@ def cmd_entregaveis(args: argparse.Namespace) -> int:
             timeout_s=args.timeout_s,
         )
         df_precos.to_csv(precos_path, index=False)
-        print(f"OK: {len(df_precos)} linhas salvas em {precos_path}")
+        print(f"OK [Etapa 1]: {len(df_precos)} linhas salvas em {precos_path}")
 
     # 2) Consolidar vendas (Etapa 2) -> nome fixo
     vendas_files = _collect_files(
@@ -200,7 +200,7 @@ def cmd_entregaveis(args: argparse.Namespace) -> int:
     df_vendas = consolidar(vendas_files, precos_ref, normalizer=normalizer)
     vendas_out = out_dir / "vendas_consolidadas_marco2025.csv"
     df_vendas.to_csv(vendas_out, index=False)
-    print(f"OK: {len(df_vendas)} linhas salvas em {vendas_out}")
+    print(f"OK [Etapa 3.4 - Vendas]: {len(df_vendas)} linhas salvas em {vendas_out}")
 
     # 3) Resumir e-mails (Etapa 3.3) -> nome fixo
     email_files = _collect_files(
@@ -234,7 +234,9 @@ def cmd_entregaveis(args: argparse.Namespace) -> int:
     df_emails = pd.DataFrame(rows).sort_values(["filial_id"], kind="stable")
     emails_out = out_dir / "resumo_gerentes_marco2025.csv"
     df_emails.to_csv(emails_out, index=False)
-    print(f"OK: {len(df_emails)} linhas salvas em {emails_out}")
+    print(f"OK [Etapa 3.4 - E-mails]: {len(df_emails)} linhas salvas em {emails_out}")
+
+    print("OK [Etapa 3.4]: entregáveis gerados com sucesso.")
 
     return 0
 
@@ -405,12 +407,17 @@ def interactive_menu() -> int:
 
         try:
             args = parser.parse_args(argv)
-            return args.func(args)
+            code = args.func(args)
+            if code != 0:
+                print(f"INFO: comando finalizou com código {code}.")
         except CaseBridgeError as exc:
             print(f"ERRO: {exc}")
             if "GEMINI_API_KEY" in str(exc):
                 print("Dica: defina a variável de ambiente GEMINI_API_KEY antes de rodar os e-mails.")
-            return 2
+        except KeyboardInterrupt:
+            print("\nINFO: operação cancelada.")
+
+        # Sempre volta ao menu após executar (ou falhar).
 
 
 def main(argv: list[str] | None = None) -> int:

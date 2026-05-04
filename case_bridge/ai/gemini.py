@@ -128,6 +128,47 @@ def _gemini_pick_best_model(
     return supported_text[0]
 
 
+def _gemini_rank_text_models(*, models: list[dict], required_method: str = "generateContent") -> list[str]:
+    def supports(m: dict) -> bool:
+        methods = m.get("supportedGenerationMethods")
+        return isinstance(methods, list) and required_method in methods
+
+    supported: list[str] = []
+    for m in models:
+        name = m.get("name")
+        if supports(m) and isinstance(name, str):
+            supported.append(name)
+
+    if not supported:
+        return []
+
+    def is_text_model(name: str) -> bool:
+        low = name.lower()
+        banned = ("tts", "image", "robotics", "deep-research", "lyria")
+        return not any(b in low for b in banned)
+
+    supported_text = [n for n in supported if is_text_model(n)] or supported
+
+    preferred = [
+        "models/gemini-2.0-flash",
+        "models/gemini-flash-latest",
+        "models/gemini-2.5-flash",
+        "models/gemini-2.0-flash-lite",
+        "models/gemini-flash-lite-latest",
+        "models/gemini-pro-latest",
+        "models/gemini-2.5-pro",
+    ]
+
+    ordered: list[str] = []
+    for p in preferred:
+        if p in supported_text and p not in ordered:
+            ordered.append(p)
+    for n in supported_text:
+        if n not in ordered:
+            ordered.append(n)
+    return ordered
+
+
 def _gemini_pick_retry_model(*, models: list[dict], current: str) -> str | None:
     def supports(m: dict) -> bool:
         methods = m.get("supportedGenerationMethods")
@@ -194,11 +235,15 @@ def _extract_function_call_args(data: dict) -> dict[str, Any] | None:
 
 
 def _extract_text(data: dict) -> str | None:
+    texts: list[str] = []
     for p in _extract_parts(data):
         text = p.get("text")
-        if isinstance(text, str):
-            return text
-    return None
+        if isinstance(text, str) and text.strip():
+            texts.append(text)
+    if not texts:
+        return None
+    # Alguns modelos retornam o conteúdo em múltiplos parts.
+    return "\n".join(texts)
 
 
 def _extrair_json_da_resposta(text: str) -> str | None:
@@ -310,6 +355,14 @@ def generate_json(
     api_key = _get_api_key(opts)
     base_url = opts.base_url.rstrip("/")
 
+    models_cache: list[dict] | None = None
+
+    def get_models() -> list[dict]:
+        nonlocal models_cache
+        if models_cache is None:
+            models_cache = _gemini_list_models(base_url=base_url, api_key=api_key, timeout_s=opts.timeout_s)
+        return models_cache
+
     model_name = _select_model(
         base_url=base_url,
         api_key=api_key,
@@ -354,7 +407,7 @@ def generate_json(
 
         if resp.status_code != 200:
             raise GeminiError(
-                f"Falha ao chamar Gemini (HTTP {resp.status_code}): {resp.text[:500]}"
+                f"Falha ao chamar Gemini (modelo {model}, HTTP {resp.status_code}): {resp.text[:500]}"
             )
 
         data = resp.json()
@@ -365,21 +418,55 @@ def generate_json(
 
         text = _extract_text(data)
         if not isinstance(text, str):
-            raise GeminiError("Gemini não retornou texto/args parseáveis.")
+            raise GeminiError(f"Gemini não retornou texto/args parseáveis (modelo {model}).")
 
         parsed = _parse_json_obj(text)
         if parsed is None:
-            raise GeminiError("Gemini respondeu, mas não retornou JSON parseável.")
+            raise GeminiError(f"Gemini respondeu, mas não retornou JSON parseável (modelo {model}).")
 
         return parsed
 
-    # Primeira tentativa
+    # Tentativas: modelo principal + até 2 alternativas (trocando modelo ajuda em 503/alta demanda).
+    candidates: list[str] = [model_name]
     try:
-        return try_call(model_name, allow_force_json=True, allow_tools=True)
+        ranked = _gemini_rank_text_models(models=get_models())
+        for m in ranked:
+            if m not in candidates:
+                candidates.append(m)
     except GeminiError:
-        # Um retry com modelo alternativo (se existir)
-        models = _gemini_list_models(base_url=base_url, api_key=api_key, timeout_s=opts.timeout_s)
-        retry_model = _gemini_pick_retry_model(models=models, current=model_name)
-        if not retry_model:
-            raise
-        return try_call(retry_model, allow_force_json=True, allow_tools=True)
+        # Se falhar ao listar modelos, ainda tentamos o modelo principal.
+        pass
+
+    # Limite para evitar explosão de chamadas.
+    candidates = candidates[:3]
+
+    last_exc: Exception | None = None
+    attempted: list[str] = []
+    for m in candidates:
+        try:
+            attempted.append(m)
+            return try_call(m, allow_force_json=True, allow_tools=True)
+        except GeminiError as exc:
+            last_exc = exc
+            continue
+
+    # Fallback final: se conseguimos listar, tenta escolher um único retry_model “clássico”.
+    try:
+        retry_model = _gemini_pick_retry_model(models=get_models(), current=model_name)
+    except GeminiError:
+        retry_model = None
+    if retry_model and retry_model not in candidates:
+        try:
+            attempted.append(retry_model)
+            return try_call(retry_model, allow_force_json=True, allow_tools=True)
+        except GeminiError as exc:
+            last_exc = exc
+
+    assert last_exc is not None
+    # Erro final com contexto de tentativas/modelos.
+    raise GeminiError(
+        "Falha ao chamar Gemini após tentativas com modelos: "
+        + ", ".join(attempted)
+        + ". Último erro: "
+        + str(last_exc)
+    ) from last_exc
