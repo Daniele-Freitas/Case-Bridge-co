@@ -1,0 +1,1 @@
+"""Normalização de produtos."""

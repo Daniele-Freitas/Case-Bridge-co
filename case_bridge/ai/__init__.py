@@ -1,0 +1,1 @@
+"""Integrações de IA (Gemini)."""
