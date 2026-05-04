@@ -79,12 +79,16 @@ def resumir_email_com_ia(*, email: Email, opts: GeminiOptions) -> EmailResumo:
     # Prompt ultra-específico para forçar JSON puro (conforme exigência do case).
     prompt_sistema = (
         "Você é um analisador de dados.\n"
-        "RESPONDA APENAS EM JSON PURO.\n"
-        "- Não inclua texto antes ou depois do JSON.\n"
-        "- Não use markdown, crases, nem blocos ```json.\n"
+        "REGRA ABSOLUTA: responda SOMENTE com um JSON VÁLIDO (RFC 8259).\n"
+        "- A resposta deve conter APENAS o JSON (nenhum texto antes/depois).\n"
+        "- NÃO use markdown, crases, nem bloco ```json.\n"
+        "- Responda em UMA ÚNICA LINHA (sem quebras de linha).\n"
+        "- O primeiro caractere da resposta deve ser '{' e o último deve ser '}'.\n"
         "- Use aspas duplas em TODAS as chaves e strings.\n"
         "- Não use vírgulas finais (trailing commas).\n"
-        "- Retorne exatamente UM objeto JSON com as chaves abaixo.\n\n"
+        "- Não inclua comentários.\n"
+        "- Se precisar de texto com aspas, escape corretamente (\\\").\n"
+        "- Antes de responder, verifique mentalmente que o JSON faz parse.\n\n"
         "Estrutura obrigatória (chaves exatas):\n"
         "{\n"
         '  \"resumo\": \"...\",\n'
@@ -97,6 +101,7 @@ def resumir_email_com_ia(*, email: Email, opts: GeminiOptions) -> EmailResumo:
         "- destaques: 2 a 4 itens.\n"
         "- alertas: 0 a 3 itens (use [] se não houver).\n"
         "- sentimento_geral: exatamente um do enum.\n"
+        "- Não use quebras de linha em nenhum campo; use espaço.\n"
     )
 
     prompt = (
