@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,25 +11,19 @@ import requests
 from case_bridge.errors import ConfigError, GeminiError
 
 
-_MODELS_PREFIX = "models/"
-_BANNED_MODEL_KEYWORDS = ("tts", "image", "robotics", "deep-research", "lyria")
-_PREFERRED_TEXT_MODELS = (
-    "models/gemini-2.0-flash",
-    "models/gemini-flash-latest",
-    "models/gemini-2.5-flash",
-    "models/gemini-2.0-flash-lite",
-    "models/gemini-flash-lite-latest",
-    "models/gemini-pro-latest",
-    "models/gemini-2.5-pro",
-)
+_FIXED_MODEL = "models/gemini-2.5-flash"
+_LAST_REQUEST_AT_S = 0.0
 
 
 @dataclass
 class GeminiOptions:
     base_url: str = "https://generativelanguage.googleapis.com/v1beta"
-    model: str = "auto"
+    # Mantido apenas por compatibilidade com a CLI (argumento --ai-model).
+    # O projeto usa um único modelo fixo para reduzir variabilidade.
+    model: str = "gemini-2.5-flash"
     api_key_env: str = "GEMINI_API_KEY"
     timeout_s: float = 20.0
+    min_interval_s: float = 0.25
 
 
 def _get_api_key(opts: GeminiOptions) -> str:
@@ -38,73 +33,9 @@ def _get_api_key(opts: GeminiOptions) -> str:
     return api_key
 
 
-def _supports_generate_content(model: dict) -> bool:
-    methods = model.get("supportedGenerationMethods")
-    return isinstance(methods, list) and "generateContent" in methods
-
-
-def _is_text_model(name: str) -> bool:
-    low = name.lower()
-    return not any(bad in low for bad in _BANNED_MODEL_KEYWORDS)
-
-
-def _gemini_list_models(*, base_url: str, api_key: str, timeout_s: float) -> list[dict]:
-    url = base_url.rstrip("/") + "/models"
-    try:
-        resp = requests.get(url, params={"key": api_key}, timeout=timeout_s)
-    except requests.RequestException as exc:
-        raise GeminiError("Falha ao listar modelos do Gemini (rede/timeout).") from exc
-
-    if resp.status_code != 200:
-        raise GeminiError(f"Falha ao listar modelos do Gemini (HTTP {resp.status_code}): {resp.text[:500]}")
-
-    data = resp.json()
-    models = data.get("models")
-    if not isinstance(models, list):
-        return []
-    return [m for m in models if isinstance(m, dict)]
-
-
-def _pick_best_text_model(models: list[dict]) -> str | None:
-    supported: list[str] = []
-    for m in models:
-        name = m.get("name")
-        if _supports_generate_content(m) and isinstance(name, str) and _is_text_model(name):
-            supported.append(name)
-
-    if not supported:
-        for m in models:
-            name = m.get("name")
-            if _supports_generate_content(m) and isinstance(name, str):
-                supported.append(name)
-
-    if not supported:
-        return None
-
-    for p in _PREFERRED_TEXT_MODELS:
-        if p in supported:
-            return p
-
-    for kw in ("flash", "pro"):
-        for n in supported:
-            if kw in n.lower():
-                return n
-
-    return supported[0]
-
-
-def _select_model(*, base_url: str, api_key: str, requested_model: str, timeout_s: float) -> str:
-    requested_model = requested_model.strip()
-
-    if requested_model.lower() == "auto":
-        models = _gemini_list_models(base_url=base_url, api_key=api_key, timeout_s=timeout_s)
-        picked = _pick_best_text_model(models)
-        if not picked:
-            raise GeminiError("Não foi possível selecionar um modelo automaticamente.")
-        return picked
-
-    requested_model = requested_model.removeprefix(_MODELS_PREFIX)
-    return f"{_MODELS_PREFIX}{requested_model}"
+def _resolve_model_name() -> str:
+    # Modelo fixo por decisão de projeto.
+    return _FIXED_MODEL
 
 
 def _build_payload(
@@ -136,7 +67,28 @@ def _build_payload(
     return payload
 
 
-def _post_generate_content(url: str, *, api_key: str, payload: dict, timeout_s: float) -> requests.Response:
+def _post_generate_content(
+    url: str,
+    *,
+    api_key: str,
+    payload: dict,
+    timeout_s: float,
+    min_interval_s: float,
+) -> requests.Response:
+    global _LAST_REQUEST_AT_S
+
+    # Intervalo mínimo entre chamadas para evitar rajadas (especialmente ao processar vários e-mails).
+    # Não resolve quota=0, mas ajuda com limites por segundo.
+    if min_interval_s and min_interval_s > 0:
+        now = time.monotonic()
+        elapsed = now - _LAST_REQUEST_AT_S
+        wait_s = float(min_interval_s) - float(elapsed)
+        if wait_s > 0:
+            time.sleep(wait_s)
+
+    # Marca o início da chamada (controla o espaçamento entre requisições)
+    _LAST_REQUEST_AT_S = time.monotonic()
+
     try:
         return requests.post(
             url,
@@ -147,6 +99,20 @@ def _post_generate_content(url: str, *, api_key: str, payload: dict, timeout_s: 
         )
     except requests.RequestException as exc:
         raise GeminiError("Falha ao chamar API do Gemini (rede/timeout).") from exc
+
+
+def _extract_api_error_message(resp: requests.Response) -> str:
+    try:
+        data = resp.json()
+    except ValueError:
+        return (resp.text or "").strip()
+
+    if isinstance(data, dict):
+        err = data.get("error")
+        if isinstance(err, dict) and isinstance(err.get("message"), str):
+            return err.get("message", "").strip()
+
+    return (resp.text or "").strip()
 
 
 def _extract_parts(data: dict) -> list[dict]:
@@ -217,12 +183,7 @@ def generate_json(
     api_key = _get_api_key(opts)
     base_url = opts.base_url.rstrip("/")
 
-    model_name = _select_model(
-        base_url=base_url,
-        api_key=api_key,
-        requested_model=opts.model,
-        timeout_s=opts.timeout_s,
-    )
+    model_name = _resolve_model_name()
 
     def call(model: str, *, allow_force_json: bool, allow_tools: bool) -> dict[str, Any]:
         payload = _build_payload(
@@ -234,9 +195,27 @@ def generate_json(
             tool_config=tool_config if allow_tools else None,
         )
         url = base_url + f"/{model}:generateContent"
-        resp = _post_generate_content(url, api_key=api_key, payload=payload, timeout_s=opts.timeout_s)
+        resp = _post_generate_content(
+            url,
+            api_key=api_key,
+            payload=payload,
+            timeout_s=opts.timeout_s,
+            min_interval_s=float(getattr(opts, "min_interval_s", 0.0) or 0.0),
+        )
 
         if resp.status_code != 200:
+            if resp.status_code == 429:
+                msg = _extract_api_error_message(resp)
+                if "limit: 0" in msg or "limit: 0" in (resp.text or ""):
+                    raise GeminiError(
+                        "Falha ao chamar Gemini (HTTP 429): sua quota para este modelo/projeto parece ser 0 (limit: 0). "
+                        "Isso normalmente é configuração/plano/billing da conta (não é bug do código). "
+                        "Verifique rate limits/quota no console do Gemini e se sua chave tem acesso ao modelo."
+                    )
+                raise GeminiError(
+                    "Falha ao chamar Gemini (HTTP 429): rate limit/quota excedida. "
+                    "Tente novamente mais tarde ou reduza volume de chamadas (menos e-mails por execução)."
+                )
             raise GeminiError(
                 f"Falha ao chamar Gemini (modelo {model}, HTTP {resp.status_code}): {resp.text[:500]}"
             )
