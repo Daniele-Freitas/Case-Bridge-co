@@ -1,144 +1,104 @@
-# Case Bridge — Etapa 1 (RPA) + Etapa 2 (Consolidação)
+# Case Bridge — CLI modular (Etapas 1, 2, 3.3 e 3.4)
 
-Este repositório implementa um fluxo em duas etapas:
+Este repositório implementa o fluxo completo do case:
 
-1. **Etapa 1 (RPA):** extrai uma tabela de preços de referência e gera `precos_referencia.csv`.
-2. **Etapa 2 (Consolidação):** consolida CSVs de vendas, normaliza produtos (3 canônicos) e calcula `volume_estimado_litros`.
+- **Etapa 1 (RPA):** extrai preços de referência e gera `precos_referencia.csv`.
+- **Etapa 2 (Vendas):** consolida CSVs, normaliza produtos e calcula `volume_estimado_litros`.
+- **Etapa 3.3 (E-mails):** resume e-mails com IA (Gemini) em JSON estruturado.
+- **Etapa 3.4 (Entregáveis):** gera automaticamente os dois CSVs finais dentro de `out/`.
+
+## Estrutura de dados
+
+- Entradas do case ficam em:
+  - `data/case/vendas/` (CSV)
+  - `data/case/emails/` (TXT)
+- Saídas geradas pelo projeto ficam em:
+  - `out/` (ignorado pelo git)
 
 ## Requisitos
 
 - Windows + PowerShell
 - Python 3.11+
-- (Opcional) Gemini API Key para melhorar a normalização de produtos desconhecidos
+- Dependências do Python: ver `requirements.txt`
+- Para resumir e-mails (Etapa 3.3/3.4): **Gemini API Key** via `GEMINI_API_KEY`
 
 ## Instalação
 
-Crie e ative um ambiente virtual (recomendado):
-
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
-
-Instale dependências:
-
-```powershell
+\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 ```
 
-## Etapa 1 — Gerar preços de referência
-
-Roda o script de extração e gera `precos_referencia.csv`.
+## Como rodar (modo menu interativo)
 
 ```powershell
-.\.venv\Scripts\python.exe .\rpa_precos.py
+\.venv\Scripts\python.exe -m case_bridge
 ```
 
-Se preferir salvar em outro caminho, use o argumento `--out` (se existir no seu script).
+## Como rodar (modo por argumentos)
 
-## Etapa 2 — Consolidar vendas e calcular litros
-
-### Entrada
-
-- Um ou mais arquivos `vendas_*.csv` com colunas obrigatórias:
-  - `data`
-  - `produto`
-  - `valor_total_brl`
-
-### Saída
-
-- Um CSV com nome único por execução:
-  - `vendas_consolidadas_YYYYMMDD_HHMMSS.csv`
-
-### Rodar consolidação
-
-Exemplo com 1 arquivo (funciona com vários também):
+### Etapa 1 — preços de referência
 
 ```powershell
-.\.venv\Scripts\python.exe .\consolidar_vendas.py .\vendas_F001_marco2025.csv --precos .\precos_referencia.csv --map-file .\mapeamento_produtos.json
+\.venv\Scripts\python.exe -m case_bridge precos --out precos_referencia.csv
 ```
 
-### Smoke test (do zero, com um CSV mínimo)
+### Etapa 2 — consolidar vendas
 
-Cria um arquivo de vendas pequeno, roda a Etapa 1 e a Etapa 2.
+Usa por padrão os arquivos em `data/case/vendas/`.
 
 ```powershell
-# 1) Gerar preços de referência
-.\.venv\Scripts\python.exe .\rpa_precos.py
-
-# 2) Criar um CSV mínimo de vendas
-@"
-data,produto,valor_total_brl
-2025-03-01,Gasolina Especial,100.00
-"@ | Out-File -Encoding utf8 .\vendas_F001_marco2025.csv
-
-# 3) (Opcional) setar a API key para habilitar IA automaticamente quando necessário
-# $env:GEMINI_API_KEY="SUA_KEY_AQUI"
-
-# 4) Consolidar (gera vendas_consolidadas_YYYYMMDD_HHMMSS.csv)
-.\.venv\Scripts\python.exe .\consolidar_vendas.py .\vendas_F001_marco2025.csv --precos .\precos_referencia.csv --map-file .\mapeamento_produtos.json
-
-# 5) Rodar de novo para validar reuso do cache no JSON
-.\.venv\Scripts\python.exe .\consolidar_vendas.py .\vendas_F001_marco2025.csv --precos .\precos_referencia.csv --map-file .\mapeamento_produtos.json
+\.venv\Scripts\python.exe -m case_bridge vendas --precos precos_referencia.csv
 ```
 
-## Normalização de produtos (dicionário + JSON persistente + IA + heurística)
+### Etapa 3.3 — resumir e-mails (requer Gemini)
 
-O sistema tenta normalizar o `produto` nesta ordem:
-
-1. **Dicionário base** (regras locais)
-2. **Arquivo JSON de mapeamento aprendido** (ex.: `mapeamento_produtos.json`)
-3. **Fallback IA (Gemini)**, se uma API key estiver configurada
-4. **Heurística local (último recurso)** para evitar quebrar a execução
-
-O “aprendizado” **não é só cache em memória**: o script salva no arquivo JSON (`--map-file`).
-Se você reutilizar o mesmo `--map-file` nas próximas execuções, ele reaproveita esses mapeamentos.
-
-### Canônicos
-
-- `Gasolina Comum`
-- `Etanol`
-- `Diesel S10`
-
-## Configurar Gemini API Key (opcional)
-
-O projeto lê a key pela variável de ambiente `GEMINI_API_KEY`.
-
-### Definir só para o terminal atual
+Defina a variável de ambiente (somente no terminal atual):
 
 ```powershell
 $env:GEMINI_API_KEY="SUA_KEY_AQUI"
 ```
 
-Conferir:
+E rode:
 
 ```powershell
-echo $env:GEMINI_API_KEY
+\.venv\Scripts\python.exe -m case_bridge emails
 ```
 
-### Definir de forma persistente (novos terminais)
+### Etapa 3.4 — gerar entregáveis finais (requer Gemini)
+
+Gera:
+
+- `out/vendas_consolidadas_marco2025.csv`
+- `out/resumo_gerentes_marco2025.csv`
 
 ```powershell
-setx GEMINI_API_KEY "SUA_KEY_AQUI"
+\.venv\Scripts\python.exe -m case_bridge entregaveis
 ```
 
-Depois, feche e reabra o terminal.
+Obs.: se `precos_referencia.csv` não existir, o comando `entregaveis` gera automaticamente via RPA.
 
-### Escolher modelo
+## Usar arquivos externos (fora do projeto)
 
-Por padrão, o projeto usa `--ai-model auto` e tenta escolher um modelo compatível automaticamente.
-
-Você pode fixar explicitamente um modelo, por exemplo:
+Você pode apontar para outros diretórios sem mudar nada no código:
 
 ```powershell
-.\.venv\Scripts\python.exe .\consolidar_vendas.py .\vendas_F001_marco2025.csv --precos .\precos_referencia.csv --map-file .\mapeamento_produtos.json --ai-model gemini-flash-latest
+\.venv\Scripts\python.exe -m case_bridge vendas --vendas-dir "C:\caminho\para\vendas" --precos precos_referencia.csv
+\.venv\Scripts\python.exe -m case_bridge emails --emails-dir "C:\caminho\para\emails"
 ```
 
-## Troubleshooting
+## Normalização de produtos (dicionário + JSON persistente + IA + heurística)
 
-### Produto desconhecido
+O sistema normaliza o `produto` nesta ordem:
 
-O script é 100% automático:
+1. **Dicionário base** (regras locais)
+2. **JSON persistente de mapeamento aprendido** (default: `out/mapeamento_produtos.json`)
+3. **(Opcional) Gemini**, se houver `GEMINI_API_KEY`
+4. **Heurística local (último fallback)** para manter execução automática
 
-- Se houver `GEMINI_API_KEY`, ele tenta normalizar via IA e salva no JSON.
-- Se não houver (ou se a IA falhar), ele usa uma heurística simples como **último recurso** e também salva no JSON.
+Canônicos:
+
+- `Gasolina Comum`
+- `Etanol`
+- `Diesel S10`
