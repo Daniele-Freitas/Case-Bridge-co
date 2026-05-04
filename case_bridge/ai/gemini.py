@@ -387,6 +387,17 @@ def generate_json(
         url = base_url + f"/{model}:generateContent"
         resp = _post_generate_content(url, api_key=api_key, payload=payload, timeout_s=opts.timeout_s)
 
+        # Alguns modelos rejeitam responseMimeType=application/json quando function calling é forçado (ANY).
+        # Ex.: "Forced function calling (ANY mode) with a response mime type ... is unsupported".
+        if (
+            resp.status_code == 400
+            and allow_tools
+            and (force_json and allow_force_json)
+            and "Forced function calling" in resp.text
+            and "response mime type" in resp.text
+        ):
+            return try_call(model, allow_force_json=False, allow_tools=allow_tools)
+
         # Alguns modelos não aceitam responseMimeType
         if resp.status_code == 400 and (force_json and allow_force_json) and "responseMimeType" in resp.text:
             return try_call(model, allow_force_json=False, allow_tools=allow_tools)
