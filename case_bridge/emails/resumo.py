@@ -78,59 +78,52 @@ def _validar_email_resumo(data: dict) -> EmailResumo:
 
 def resumir_email_com_ia(*, email: Email, opts: GeminiOptions) -> EmailResumo:
     # Envia o conteúdo mais relevante (assunto + corpo). Mantém o prompt determinístico.
-    prompt = (
-        "Você é um assistente que resume e-mails de gerentes de postos de combustível.\n"
-        "Use a chamada de função para retornar os campos estruturados.\n\n"
+    # Importante: exigimos JSON puro e estrutura exata (sem markdown, sem texto extra).
+    prompt_sistema = (
+        "Você é um analisador de dados. RESPONDA APENAS EM JSON PURO.\n"
+        "Não inclua texto fora do JSON. Não use markdown.\n"
+        "O JSON deve seguir EXATAMENTE esta estrutura (mesmas chaves):\n"
+        "{\n"
+        '  \"resumo\": \"síntese de 2 a 3 frases\",\n'
+        '  \"destaques\": [\"ponto 1\", \"ponto 2\"],\n'
+        '  \"alertas\": [\"problema 1\"],\n'
+        '  \"sentimento_geral\": \"positivo|neutro|negativo\"\n'
+        "}\n\n"
         "Regras:\n"
         "- resumo: 1 a 3 frases, em pt-BR.\n"
         "- destaques: 2 a 4 itens.\n"
         "- alertas: 0 a 3 itens (use [] se não houver).\n"
-        "- sentimento_geral: escolha exatamente um valor do enum.\n\n"
+        "- sentimento_geral: escolha exatamente um valor do enum.\n"
+    )
+
+    prompt = (
+        f"{prompt_sistema}\n\n"
+        "Analise o seguinte e-mail e gere o JSON conforme a estrutura:\n\n"
         f"Filial: {email.filial_id} ({email.filial_nome}).\n"
         f"Assunto: {email.assunto or ''}\n\n"
         f"Corpo:\n{email.corpo}\n"
     )
 
-    tools = [
-        {
-            "functionDeclarations": [
-                {
-                    "name": "emitir_resumo_email",
-                    "description": "Retorna o resumo estruturado do e-mail em campos.",
-                    "parameters": {
-                        "type": "OBJECT",
-                        "properties": {
-                            "resumo": {"type": "STRING"},
-                            "destaques": {"type": "ARRAY", "items": {"type": "STRING"}},
-                            "alertas": {"type": "ARRAY", "items": {"type": "STRING"}},
-                            "sentimento_geral": {
-                                "type": "STRING",
-                                "enum": ["positivo", "neutro", "negativo"],
-                            },
-                        },
-                        "required": ["resumo", "destaques", "alertas", "sentimento_geral"],
-                    },
-                }
-            ]
-        }
-    ]
-    tool_config = {
-        "functionCallingConfig": {
-            "mode": "ANY",
-            "allowedFunctionNames": ["emitir_resumo_email"],
-        }
-    }
-
-    data = generate_json(
-        prompt=prompt,
-        opts=opts,
-        max_output_tokens=512,
-        temperature=0.0,
-        force_json=True,
-        strict_json=True,
-        tools=tools,
-        tool_config=tool_config,
-    )
+    try:
+        data = generate_json(
+            prompt=prompt,
+            opts=opts,
+            max_output_tokens=512,
+            temperature=0.0,
+            force_json=True,
+            strict_json=True,
+            tools=None,
+            tool_config=None,
+        )
+    except Exception as exc:
+        # Fallback determinístico para não travar a automação/entregável.
+        # Mantém o formato válido para o CSV.
+        return EmailResumo(
+            resumo="Erro ao processar e-mail.",
+            destaques=["Resumo indisponível (falha técnica)."],
+            alertas=[f"Falha técnica: {type(exc).__name__}: {str(exc)[:200]}"],
+            sentimento_geral="neutro",
+        )
 
     if not isinstance(data, dict):
         raise DataError("Gemini retornou um JSON inválido (não-objeto).")
@@ -144,4 +137,12 @@ def resumir_email_com_ia(*, email: Email, opts: GeminiOptions) -> EmailResumo:
         except json.JSONDecodeError:
             pass
 
-    return _validar_email_resumo(data)
+    try:
+        return _validar_email_resumo(data)
+    except Exception as exc:
+        return EmailResumo(
+            resumo="Erro ao validar resposta do Gemini.",
+            destaques=["Resumo indisponível (falha técnica)."],
+            alertas=[f"Falha técnica: {type(exc).__name__}: {str(exc)[:200]}"],
+            sentimento_geral="neutro",
+        )
