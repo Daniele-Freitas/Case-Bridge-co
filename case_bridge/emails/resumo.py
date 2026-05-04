@@ -77,23 +77,27 @@ def _validar_email_resumo(data: dict) -> EmailResumo:
 
 
 def resumir_email_com_ia(*, email: Email, opts: GeminiOptions) -> EmailResumo:
-    # Envia o conteúdo mais relevante (assunto + corpo). Mantém o prompt determinístico.
-    # Importante: exigimos JSON puro e estrutura exata (sem markdown, sem texto extra).
+    # Prompt ultra-específico para forçar JSON puro (conforme exigência do case).
     prompt_sistema = (
-        "Você é um analisador de dados. RESPONDA APENAS EM JSON PURO.\n"
-        "Não inclua texto fora do JSON. Não use markdown.\n"
-        "O JSON deve seguir EXATAMENTE esta estrutura (mesmas chaves):\n"
+        "Você é um analisador de dados.\n"
+        "RESPONDA APENAS EM JSON PURO.\n"
+        "- Não inclua texto antes ou depois do JSON.\n"
+        "- Não use markdown, crases, nem blocos ```json.\n"
+        "- Use aspas duplas em TODAS as chaves e strings.\n"
+        "- Não use vírgulas finais (trailing commas).\n"
+        "- Retorne exatamente UM objeto JSON com as chaves abaixo.\n\n"
+        "Estrutura obrigatória (chaves exatas):\n"
         "{\n"
-        '  \"resumo\": \"síntese de 2 a 3 frases\",\n'
-        '  \"destaques\": [\"ponto 1\", \"ponto 2\"],\n'
-        '  \"alertas\": [\"problema 1\"],\n'
+        '  \"resumo\": \"...\",\n'
+        '  \"destaques\": [\"...\"],\n'
+        '  \"alertas\": [\"...\"],\n'
         '  \"sentimento_geral\": \"positivo|neutro|negativo\"\n'
         "}\n\n"
-        "Regras:\n"
-        "- resumo: 1 a 3 frases, em pt-BR.\n"
+        "Regras de conteúdo:\n"
+        "- resumo: 1 a 3 frases, pt-BR.\n"
         "- destaques: 2 a 4 itens.\n"
         "- alertas: 0 a 3 itens (use [] se não houver).\n"
-        "- sentimento_geral: escolha exatamente um valor do enum.\n"
+        "- sentimento_geral: exatamente um do enum.\n"
     )
 
     prompt = (
@@ -104,26 +108,16 @@ def resumir_email_com_ia(*, email: Email, opts: GeminiOptions) -> EmailResumo:
         f"Corpo:\n{email.corpo}\n"
     )
 
-    try:
-        data = generate_json(
-            prompt=prompt,
-            opts=opts,
-            max_output_tokens=512,
-            temperature=0.0,
-            force_json=True,
-            strict_json=True,
-            tools=None,
-            tool_config=None,
-        )
-    except Exception as exc:
-        # Fallback determinístico para não travar a automação/entregável.
-        # Mantém o formato válido para o CSV.
-        return EmailResumo(
-            resumo="Erro ao processar e-mail.",
-            destaques=["Resumo indisponível (falha técnica)."],
-            alertas=[f"Falha técnica: {type(exc).__name__}: {str(exc)[:200]}"],
-            sentimento_geral="neutro",
-        )
+    data = generate_json(
+        prompt=prompt,
+        opts=opts,
+        max_output_tokens=512,
+        temperature=0.0,
+        force_json=True,
+        strict_json=True,
+        tools=None,
+        tool_config=None,
+    )
 
     if not isinstance(data, dict):
         raise DataError("Gemini retornou um JSON inválido (não-objeto).")
@@ -137,12 +131,4 @@ def resumir_email_com_ia(*, email: Email, opts: GeminiOptions) -> EmailResumo:
         except json.JSONDecodeError:
             pass
 
-    try:
-        return _validar_email_resumo(data)
-    except Exception as exc:
-        return EmailResumo(
-            resumo="Erro ao validar resposta do Gemini.",
-            destaques=["Resumo indisponível (falha técnica)."],
-            alertas=[f"Falha técnica: {type(exc).__name__}: {str(exc)[:200]}"],
-            sentimento_geral="neutro",
-        )
+    return _validar_email_resumo(data)
