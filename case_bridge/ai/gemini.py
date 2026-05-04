@@ -223,6 +223,30 @@ def _extract_parts(data: dict) -> list[dict]:
     return [p for p in parts if isinstance(p, dict)]
 
 
+def _debug_candidate(data: dict) -> str:
+    try:
+        candidates = data.get("candidates")
+        if not isinstance(candidates, list) or not candidates:
+            pf = data.get("promptFeedback")
+            if isinstance(pf, dict):
+                block_reason = pf.get("blockReason")
+                if isinstance(block_reason, str) and block_reason:
+                    return f"promptFeedback.blockReason={block_reason}"
+            return "sem candidates"
+
+        c0 = candidates[0] if isinstance(candidates[0], dict) else None
+        if not isinstance(c0, dict):
+            return "candidate[0] inválido"
+
+        finish = c0.get("finishReason")
+        if isinstance(finish, str) and finish:
+            return f"finishReason={finish}"
+
+        return "candidate[0] sem finishReason"
+    except Exception:
+        return "(debug indisponível)"
+
+
 def _extract_function_call_args(data: dict) -> dict[str, Any] | None:
     for p in _extract_parts(data):
         fc = p.get("functionCall")
@@ -434,7 +458,14 @@ def generate_json(
 
         text = _extract_text(data)
         if not isinstance(text, str):
-            raise GeminiError(f"Gemini não retornou texto/args parseáveis (modelo {model}).")
+            # Algumas respostas vêm sem content (ex.: SAFETY/RECITATION) quando tools estão habilitadas.
+            # Nesse caso, tentamos uma chamada sem tools para obter JSON via responseMimeType.
+            if allow_tools:
+                return try_call(model, allow_force_json=allow_force_json, allow_tools=False)
+            dbg = _debug_candidate(data)
+            raise GeminiError(
+                f"Gemini não retornou texto/args parseáveis (modelo {model}; {dbg})."
+            )
 
         if strict_json:
             try:

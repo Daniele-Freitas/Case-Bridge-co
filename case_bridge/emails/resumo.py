@@ -126,7 +126,7 @@ def resumir_email_com_ia(*, email: Email, opts: GeminiOptions) -> EmailResumo:
         opts=opts,
         max_output_tokens=512,
         temperature=0.0,
-        force_json=False,
+        force_json=True,
         strict_json=True,
         tools=tools,
         tool_config=tool_config,
