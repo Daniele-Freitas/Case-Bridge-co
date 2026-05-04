@@ -22,7 +22,11 @@ Thumbs.db
 .idea/
 
 # Project outputs / generated artifacts
+out/
 precos_referencia.csv
 vendas_consolidadas_*.csv
 mapeamento_produtos*.json
 *.log
+
+# Environment variables
+.env
