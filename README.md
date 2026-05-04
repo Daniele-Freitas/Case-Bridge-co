@@ -6,6 +6,7 @@ Este repositório implementa o fluxo completo do case:
 - **Etapa 2 (Vendas):** consolida CSVs, normaliza produtos e calcula `volume_estimado_litros`.
 - **Etapa 3.3 (E-mails):** resume e-mails com IA (Gemini) em JSON estruturado.
 - **Etapa 3.4 (Entregáveis):** gera automaticamente os dois CSVs finais dentro de `out/`.
+- **Ranking de faturamento:** gera tabelas (CSV) por filial e por produto.
 
 ## Estrutura de dados
 
@@ -121,6 +122,17 @@ Gera:
 ```
 
 Obs.: se `precos_referencia.csv` não existir, o comando `entregaveis` gera automaticamente via RPA.
+
+### Ranking de faturamento — por filial e por produto
+
+Gera:
+
+- `out/ranking_faturamento_por_filial.csv`
+- `out/ranking_faturamento_por_produto.csv`
+
+```powershell
+\.venv\Scripts\python.exe -m case_bridge faturamento --precos precos_referencia.csv
+```
 
 ## Usar arquivos externos (fora do projeto)
 

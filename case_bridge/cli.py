@@ -12,6 +12,7 @@ from case_bridge.ai.gemini import GeminiOptions
 from case_bridge.emails.parser import parse_email_txt
 from case_bridge.emails.resumo import resumir_email_com_ia
 from case_bridge.errors import CaseBridgeError, DataError
+from case_bridge.faturamento import ranking_faturamento_por_filial, ranking_faturamento_por_produto
 from case_bridge.paths import default_emails_dir, default_out_dir, default_vendas_dir, find_repo_root
 from case_bridge.precos.rpa import DEFAULT_URL, extrair_precos_referencia, extrair_precos_referencia_de_arquivo
 from case_bridge.produtos.normalizer import (
@@ -241,6 +242,60 @@ def cmd_entregaveis(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_vendas_consolidadas(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        raise DataError(f"Arquivo não encontrado: {path}")
+
+    df = pd.read_csv(path)
+
+    required = {
+        "filial",
+        "produto",
+        "valor_total_brl",
+        "volume_estimado_litros",
+    }
+    missing = required - set(df.columns)
+    if missing:
+        raise DataError(
+            f"CSV de vendas consolidadas sem colunas obrigatórias {sorted(missing)}: {path}"
+        )
+
+    return df
+
+
+def cmd_faturamento(args: argparse.Namespace) -> int:
+    root = find_repo_root()
+    out_dir = default_out_dir(root)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.vendas_consolidadas:
+        df_vendas = _load_vendas_consolidadas(Path(args.vendas_consolidadas))
+    else:
+        arquivos = _collect_files(
+            files=args.vendas,
+            dir_path=args.vendas_dir,
+            glob=args.vendas_glob,
+        )
+        precos_ref = PrecosRef.carregar(Path(args.precos))
+        normalizer = _build_produto_normalizer(args, out_dir=out_dir)
+        df_vendas = consolidar(arquivos, precos_ref, normalizer=normalizer)
+
+    df_filial = ranking_faturamento_por_filial(df_vendas)
+    df_produto = ranking_faturamento_por_produto(df_vendas)
+
+    out_filial = Path(args.out_filial) if args.out_filial else (out_dir / "ranking_faturamento_por_filial.csv")
+    out_produto = Path(args.out_produto) if args.out_produto else (out_dir / "ranking_faturamento_por_produto.csv")
+
+    _ensure_parent(out_filial)
+    _ensure_parent(out_produto)
+    df_filial.to_csv(out_filial, index=False)
+    df_produto.to_csv(out_produto, index=False)
+
+    print(f"OK [Faturamento - Filial]: {len(df_filial)} linhas salvas em {out_filial}")
+    print(f"OK [Faturamento - Produto]: {len(df_produto)} linhas salvas em {out_produto}")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     root = find_repo_root()
 
@@ -374,6 +429,49 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ent.add_argument("--ai-timeout-s", type=float, default=20.0)
     p_ent.set_defaults(func=cmd_entregaveis)
 
+    # faturamento
+    p_fat = sub.add_parser(
+        "faturamento",
+        help="Ranking de faturamento (por filial e por produto) em CSV",
+    )
+    p_fat.add_argument(
+        "--vendas-consolidadas",
+        default=None,
+        help="CSV já consolidado (se omitido, consolida a partir de data/case/vendas)",
+    )
+    p_fat.add_argument(
+        "--vendas-dir",
+        default=str(default_vendas_dir(root)),
+        help="Diretório com CSVs de vendas (default: data/case/vendas)",
+    )
+    p_fat.add_argument("--vendas-glob", default="vendas_*.csv")
+    p_fat.add_argument("--vendas", nargs="*", default=None)
+    p_fat.add_argument(
+        "--precos",
+        default=str(find_repo_root() / "precos_referencia.csv"),
+        help="CSV de preços de referência (usado se não passar --vendas-consolidadas)",
+    )
+
+    p_fat.add_argument(
+        "--map-file",
+        default=None,
+        help="JSON com mapeamentos aprendidos (default: out/mapeamento_produtos.json)",
+    )
+    p_fat.add_argument(
+        "--ai",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Habilita/desabilita IA para produtos desconhecidos (default: auto se GEMINI_API_KEY existir)",
+    )
+    p_fat.add_argument("--ai-model", default="auto")
+    p_fat.add_argument("--ai-base-url", default="https://generativelanguage.googleapis.com/v1beta")
+    p_fat.add_argument("--ai-api-key-env", default="GEMINI_API_KEY")
+    p_fat.add_argument("--ai-timeout-s", type=float, default=20.0)
+
+    p_fat.add_argument("--out-filial", default=None, help="CSV de saída (default: out/ranking_faturamento_por_filial.csv)")
+    p_fat.add_argument("--out-produto", default=None, help="CSV de saída (default: out/ranking_faturamento_por_produto.csv)")
+    p_fat.set_defaults(func=cmd_faturamento)
+
     return parser
 
 
@@ -386,6 +484,7 @@ def interactive_menu() -> int:
         print("2) Etapa 2: consolidar vendas (out/) ")
         print("3) Etapa 3.3: resumir e-mails (out/) [requer GEMINI_API_KEY]")
         print("4) Etapa 3.4: gerar entregáveis finais (out/) [requer GEMINI_API_KEY]")
+        print("5) Ranking de faturamento (out/)")
         print("0) Sair")
 
         choice = input("Escolha: ").strip()
@@ -401,6 +500,8 @@ def interactive_menu() -> int:
             argv = ["emails", "--emails-dir", str(default_emails_dir(root))]
         elif choice == "4":
             argv = ["entregaveis", "--precos", str(root / "precos_referencia.csv")]
+        elif choice == "5":
+            argv = ["faturamento", "--precos", str(root / "precos_referencia.csv")]
         else:
             print("Opção inválida.")
             continue
