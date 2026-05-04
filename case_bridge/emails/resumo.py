@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 
@@ -121,14 +120,5 @@ def resumir_email_com_ia(*, email: Email, opts: GeminiOptions) -> EmailResumo:
 
     if not isinstance(data, dict):
         raise DataError("Gemini retornou um JSON inválido (não-objeto).")
-
-    # Algumas vezes o modelo devolve JSON como string dentro de um campo.
-    if len(data) == 1 and "json" in data and isinstance(data.get("json"), str):
-        try:
-            parsed = json.loads(data["json"])
-            if isinstance(parsed, dict):
-                data = parsed
-        except json.JSONDecodeError:
-            pass
 
     return _validar_email_resumo(data)

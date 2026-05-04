@@ -93,32 +93,6 @@ def _pick_best_text_model(models: list[dict]) -> str | None:
     return supported[0]
 
 
-def _resolve_model_name(*, requested: str, models: list[dict]) -> str | None:
-    requested = requested.strip().removeprefix(_MODELS_PREFIX)
-    exact = f"{_MODELS_PREFIX}{requested}"
-
-    for m in models:
-        name = m.get("name")
-        if _supports_generate_content(m) and isinstance(name, str) and name == exact:
-            return name
-
-    contains: list[str] = []
-    for m in models:
-        name = m.get("name")
-        if not (_supports_generate_content(m) and isinstance(name, str)):
-            continue
-        short = name.removeprefix(_MODELS_PREFIX)
-        if requested in short:
-            contains.append(name)
-
-    if not contains:
-        return None
-    for c in contains:
-        if c.endswith("-latest"):
-            return c
-    return contains[0]
-
-
 def _select_model(*, base_url: str, api_key: str, requested_model: str, timeout_s: float) -> str:
     requested_model = requested_model.strip()
 
@@ -261,33 +235,6 @@ def generate_json(
         )
         url = base_url + f"/{model}:generateContent"
         resp = _post_generate_content(url, api_key=api_key, payload=payload, timeout_s=opts.timeout_s)
-
-        if (
-            resp.status_code == 400
-            and allow_tools
-            and (force_json and allow_force_json)
-            and "Forced function calling" in resp.text
-            and "response mime type" in resp.text
-        ):
-            return call(model, allow_force_json=False, allow_tools=True)
-
-        if resp.status_code == 400 and (force_json and allow_force_json) and "responseMimeType" in resp.text:
-            return call(model, allow_force_json=False, allow_tools=allow_tools)
-
-        if resp.status_code == 400 and allow_tools and any(
-            k in resp.text for k in ("toolConfig", "functionDeclarations", "tools")
-        ):
-            return call(model, allow_force_json=allow_force_json, allow_tools=False)
-
-        if resp.status_code == 404:
-            models = _gemini_list_models(base_url=base_url, api_key=api_key, timeout_s=opts.timeout_s)
-            resolved = None
-            if opts.model.strip().lower() != "auto":
-                resolved = _resolve_model_name(requested=opts.model, models=models)
-            if not resolved:
-                resolved = _pick_best_text_model(models)
-            if resolved and resolved != model:
-                return call(resolved, allow_force_json=allow_force_json, allow_tools=allow_tools)
 
         if resp.status_code != 200:
             raise GeminiError(

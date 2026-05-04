@@ -160,7 +160,7 @@ def classificar_produto_com_ia(*, produto_raw: str, canonicos: list[str], ai: AI
             opts=opts,
             max_output_tokens=128,
             temperature=0.0,
-            force_json=True,
+            force_json=False,
             tools=tools,
             tool_config=tool_config,
         )
