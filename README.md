@@ -84,6 +84,11 @@ python -m pip install -r requirements.txt
 \.venv\Scripts\python.exe -m case_bridge
 ```
 
+Ao iniciar, o modo interativo pergunta se você quer:
+
+- usar os dados padrão do case (`data/case/`), ou
+- informar caminhos de arquivos/diretórios para vendas e e-mails.
+
 **Nota:** A CLI não pede nenhuma entrada durante a execução. Se uma etapa precisar da `GEMINI_API_KEY`, ela deve estar **já definida no terminal antes** de rodar o comando.
 
 ## Como rodar (modo por argumentos)
@@ -114,8 +119,8 @@ A chave `GEMINI_API_KEY` já deve estar definida (ver seção acima). Depois rod
 
 Gera:
 
-- `out/vendas_consolidadas_marco2025.csv`
-- `out/resumo_gerentes_marco2025.csv`
+- `out/vendas_consolidadas_<mes><ano>.csv` (ex.: `vendas_consolidadas_marco2025.csv`)
+- `out/resumo_gerentes_<mes><ano>.csv` (ex.: `resumo_gerentes_marco2025.csv`)
 
 ```powershell
 \.venv\Scripts\python.exe -m case_bridge entregaveis

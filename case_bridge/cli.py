@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -49,6 +50,110 @@ def _collect_files(*, files: list[str] | None, dir_path: str, glob: str) -> list
 
 def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _infer_period_label_from_vendas_df(df_vendas: pd.DataFrame) -> str:
+    if "data" not in df_vendas.columns:
+        raise DataError("Dados de vendas sem coluna 'data' para inferir o período.")
+
+    # Primeiro tenta ISO (YYYY-MM-DD), comum nos CSVs de vendas.
+    s = pd.to_datetime(df_vendas["data"], errors="coerce", dayfirst=False)
+    if s.isna().any():
+        # Depois tenta dayfirst (DD/MM/YYYY) para cenários locais.
+        s2 = pd.to_datetime(df_vendas["data"], errors="coerce", dayfirst=True)
+        s = s.fillna(s2)
+    if s.isna().any():
+        raise DataError("Há datas inválidas/NaT na coluna 'data' das vendas; não foi possível inferir o período.")
+
+    meses = s.dt.to_period("M").astype(str).unique().tolist()  # ex: ['2025-03']
+    if len(meses) != 1:
+        raise DataError(
+            "Não foi possível inferir um único mês/ano a partir das vendas (há mais de um período em 'data')."
+        )
+
+    ano_str, mes_str = str(meses[0]).split("-")
+    ano = int(ano_str)
+    mes = int(mes_str)
+
+    meses_pt = {
+        1: "janeiro",
+        2: "fevereiro",
+        3: "marco",
+        4: "abril",
+        5: "maio",
+        6: "junho",
+        7: "julho",
+        8: "agosto",
+        9: "setembro",
+        10: "outubro",
+        11: "novembro",
+        12: "dezembro",
+    }
+    mes_nome = meses_pt.get(mes)
+    if not mes_nome:
+        raise DataError("Mês inválido ao inferir período das vendas.")
+
+    return f"{mes_nome}{ano}"
+
+
+def _split_paths(text: str) -> list[str]:
+    raw = text.strip()
+    if not raw:
+        return []
+
+    parts = [p.strip() for p in re.split(r"[;,]", raw) if p.strip()]
+    return parts
+
+
+def _menu_choose_inputs(*, root: Path) -> dict[str, object]:
+    print("\nFonte de dados")
+    print("1) Usar os dados do case (data/case)")
+    print("2) Informar caminhos (arquivos/diretórios)")
+
+    choice = input("Escolha (1/2): ").strip() or "1"
+    if choice != "2":
+        return {
+            "precos": str(root / "precos_referencia.csv"),
+            "vendas_dir": str(default_vendas_dir(root)),
+            "vendas": [],
+            "emails_dir": str(default_emails_dir(root)),
+            "emails": [],
+        }
+
+    precos = input(
+        "Caminho do precos_referencia.csv (Enter para padrão ./precos_referencia.csv): "
+    ).strip()
+    precos = precos or str(root / "precos_referencia.csv")
+
+    vendas_raw = input(
+        "Vendas: informe arquivos (separados por ; ou ,) OU Enter para usar data/case/vendas/: "
+    )
+    vendas = _split_paths(vendas_raw)
+    vendas_dir = ""
+    if not vendas:
+        vendas_dir = input(
+            f"Diretório de vendas (Enter para padrão {default_vendas_dir(root)}): "
+        ).strip()
+        vendas_dir = vendas_dir or str(default_vendas_dir(root))
+
+    emails_raw = input(
+        "E-mails: informe arquivos (separados por ; ou ,) OU Enter para usar data/case/emails/: "
+    )
+    emails = _split_paths(emails_raw)
+    emails_dir = ""
+    if not emails:
+        emails_dir = input(
+            f"Diretório de e-mails (Enter para padrão {default_emails_dir(root)}): "
+        ).strip()
+        emails_dir = emails_dir or str(default_emails_dir(root))
+
+    return {
+        "precos": precos,
+        "vendas_dir": vendas_dir,
+        "vendas": vendas,
+        "emails_dir": emails_dir,
+        "emails": emails,
+    }
 
 
 def cmd_precos(args: argparse.Namespace) -> int:
@@ -199,7 +304,8 @@ def cmd_entregaveis(args: argparse.Namespace) -> int:
     precos_ref = PrecosRef.carregar(precos_path)
     normalizer = _build_produto_normalizer(args, out_dir=out_dir)
     df_vendas = consolidar(vendas_files, precos_ref, normalizer=normalizer)
-    vendas_out = out_dir / "vendas_consolidadas_marco2025.csv"
+    periodo = _infer_period_label_from_vendas_df(df_vendas)
+    vendas_out = out_dir / f"vendas_consolidadas_{periodo}.csv"
     df_vendas.to_csv(vendas_out, index=False)
     print(f"OK [Etapa 3.4 - Vendas]: {len(df_vendas)} linhas salvas em {vendas_out}")
 
@@ -233,7 +339,7 @@ def cmd_entregaveis(args: argparse.Namespace) -> int:
         )
 
     df_emails = pd.DataFrame(rows).sort_values(["filial_id"], kind="stable")
-    emails_out = out_dir / "resumo_gerentes_marco2025.csv"
+    emails_out = out_dir / f"resumo_gerentes_{periodo}.csv"
     df_emails.to_csv(emails_out, index=False)
     print(f"OK [Etapa 3.4 - E-mails]: {len(df_emails)} linhas salvas em {emails_out}")
 
@@ -478,6 +584,8 @@ def _build_parser() -> argparse.ArgumentParser:
 def interactive_menu() -> int:
     root = find_repo_root()
 
+    inputs = _menu_choose_inputs(root=root)
+
     while True:
         print("\nCase Bridge")
         print("1) Etapa 1: gerar precos_referencia.csv")
@@ -495,13 +603,39 @@ def interactive_menu() -> int:
         if choice == "1":
             argv = ["precos", "--out", str(root / "precos_referencia.csv")]
         elif choice == "2":
-            argv = ["vendas", "--vendas-dir", str(default_vendas_dir(root)), "--precos", str(root / "precos_referencia.csv")]
+            argv = ["vendas", "--precos", str(inputs["precos"])]
+            vendas = list(inputs.get("vendas", []))
+            if vendas:
+                argv += ["--vendas", *vendas]
+            else:
+                argv += ["--vendas-dir", str(inputs["vendas_dir"])]
         elif choice == "3":
-            argv = ["emails", "--emails-dir", str(default_emails_dir(root))]
+            argv = ["emails"]
+            emails = list(inputs.get("emails", []))
+            if emails:
+                argv += ["--emails", *emails]
+            else:
+                argv += ["--emails-dir", str(inputs["emails_dir"])]
         elif choice == "4":
-            argv = ["entregaveis", "--precos", str(root / "precos_referencia.csv")]
+            argv = ["entregaveis", "--precos", str(inputs["precos"])]
+            vendas = list(inputs.get("vendas", []))
+            if vendas:
+                argv += ["--vendas", *vendas]
+            else:
+                argv += ["--vendas-dir", str(inputs["vendas_dir"])]
+
+            emails = list(inputs.get("emails", []))
+            if emails:
+                argv += ["--emails", *emails]
+            else:
+                argv += ["--emails-dir", str(inputs["emails_dir"])]
         elif choice == "5":
-            argv = ["faturamento", "--precos", str(root / "precos_referencia.csv")]
+            argv = ["faturamento", "--precos", str(inputs["precos"])]
+            vendas = list(inputs.get("vendas", []))
+            if vendas:
+                argv += ["--vendas", *vendas]
+            else:
+                argv += ["--vendas-dir", str(inputs["vendas_dir"])]
         else:
             print("Opção inválida.")
             continue
