@@ -342,6 +342,7 @@ def generate_json(
     max_output_tokens: int = 512,
     temperature: float = 0.0,
     force_json: bool = True,
+    strict_json: bool = False,
     tools: list[dict] | None = None,
     tool_config: dict | None = None,
 ) -> dict[str, Any]:
@@ -350,6 +351,10 @@ def generate_json(
     - Tenta priorizar function calling (args) quando disponível.
     - Caso contrário, tenta parsear JSON a partir do texto retornado.
     - Faz no máximo 1 retry com outro modelo se a resposta vier não-parseável.
+
+    strict_json=True:
+    - Não tenta “extrair” JSON de texto (sem fences/regex/substring).
+    - A resposta precisa ser JSON puro (parseável via json.loads).
     """
 
     api_key = _get_api_key(opts)
@@ -420,7 +425,15 @@ def generate_json(
         if not isinstance(text, str):
             raise GeminiError(f"Gemini não retornou texto/args parseáveis (modelo {model}).")
 
-        parsed = _parse_json_obj(text)
+        if strict_json:
+            try:
+                obj = json.loads(text)
+            except json.JSONDecodeError:
+                obj = None
+            parsed = obj if isinstance(obj, dict) else None
+        else:
+            parsed = _parse_json_obj(text)
+
         if parsed is None:
             raise GeminiError(f"Gemini respondeu, mas não retornou JSON parseável (modelo {model}).")
 

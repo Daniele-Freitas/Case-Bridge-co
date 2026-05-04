@@ -80,13 +80,7 @@ def resumir_email_com_ia(*, email: Email, opts: GeminiOptions) -> EmailResumo:
     # Envia o conteúdo mais relevante (assunto + corpo). Mantém o prompt determinístico.
     prompt = (
         "Você é um assistente que resume e-mails de gerentes de postos de combustível.\n"
-        "Retorne SOMENTE JSON válido (sem markdown, sem texto extra) no formato exato:\n"
-        "{\n"
-        '  "resumo": "...",\n'
-        '  "destaques": ["..."],\n'
-        '  "alertas": ["..."],\n'
-        '  "sentimento_geral": "positivo|neutro|negativo"\n'
-        "}\n\n"
+        "Use a chamada de função para retornar os campos estruturados.\n\n"
         "Regras:\n"
         "- resumo: 1 a 3 frases, em pt-BR.\n"
         "- destaques: 2 a 4 itens.\n"
@@ -97,14 +91,45 @@ def resumir_email_com_ia(*, email: Email, opts: GeminiOptions) -> EmailResumo:
         f"Corpo:\n{email.corpo}\n"
     )
 
+    tools = [
+        {
+            "functionDeclarations": [
+                {
+                    "name": "emitir_resumo_email",
+                    "description": "Retorna o resumo estruturado do e-mail em campos.",
+                    "parameters": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "resumo": {"type": "STRING"},
+                            "destaques": {"type": "ARRAY", "items": {"type": "STRING"}},
+                            "alertas": {"type": "ARRAY", "items": {"type": "STRING"}},
+                            "sentimento_geral": {
+                                "type": "STRING",
+                                "enum": ["positivo", "neutro", "negativo"],
+                            },
+                        },
+                        "required": ["resumo", "destaques", "alertas", "sentimento_geral"],
+                    },
+                }
+            ]
+        }
+    ]
+    tool_config = {
+        "functionCallingConfig": {
+            "mode": "ANY",
+            "allowedFunctionNames": ["emitir_resumo_email"],
+        }
+    }
+
     data = generate_json(
         prompt=prompt,
         opts=opts,
         max_output_tokens=512,
         temperature=0.0,
         force_json=True,
-        tools=None,
-        tool_config=None,
+        strict_json=True,
+        tools=tools,
+        tool_config=tool_config,
     )
 
     if not isinstance(data, dict):
