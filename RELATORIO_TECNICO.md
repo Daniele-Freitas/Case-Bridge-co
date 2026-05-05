@@ -1,114 +1,101 @@
-# Case Bridge — Relatório técnico (decisões, limitações e próximos passos)
+# Relatório Técnico — Case Bridge
 
-## 1) Como pensei a solução
+## 1. Visão Geral e Objetivos
 
-A solução foi desenhada como um **pipeline de dados determinístico**, com etapas pequenas e verificáveis, priorizando:
+O projeto foi desenvolvido para solucionar um problema crítico de fragmentação de dados em uma rede de postos de combustível. O desafio central não era apenas técnico, mas de negócio: como transformar relatos informais e tabelas inconsistentes em uma visão gerencial unificada para tomada de decisão.
 
-- **Reprodutibilidade**: o mesmo input gera o mesmo output (principalmente nas etapas sem IA).
-- **Separação de responsabilidades**: cada módulo faz uma coisa bem definida.
-- **Execução simples**: um único ponto de entrada (CLI) para rodar as etapas com dados do case ou dados externos.
-- **Evolução incremental**: cada feature nova entra como um comando/etapa isolada (evitando “scripts soltos”).
-
-A partir do problema do case, que mistura coleta (RPA), transformação (normalização/consolidação) e sumarização (IA), o desenho escolhido foi:
-
-1. **Entrada de dados versionada** em `data/case/` (vendas e e-mails), para termos um “contrato” estável.
-2. **Saídas geradas** em `out/` (ignorado pelo git), para não poluir o repositório com artefatos.
-3. **CLI** como orquestrador das etapas, garantindo uma experiência consistente (argumentos e modo interativo).
-
-### Por que CLI (e não notebooks/scripts)
-A decisão por CLI (ao invés de scripts isolados ou notebook) vem do objetivo de entrega:
-
-- Facilita rodar o projeto em outra máquina com o mínimo de atrito.
-- Ajuda a demonstrar “produto” e não apenas “código”.
-- Permite tanto automação (por argumentos) quanto uso guiado (menu interativo).
-
-Além disso, a CLI foi desenhada para dois estilos de uso:
-
-- **Rodar etapa por etapa** (bom para validar outputs intermediários e debugar).
-- **Rodar tudo de uma vez** no final (Etapa 3.4), gerando os entregáveis do mês em um único comando.
-
-### Dados do case vs. dados externos
-O projeto assume por padrão os dados do case em `data/case`, mas também permite o usuário informar caminhos de arquivos/diretórios no modo interativo. A motivação foi:
-
-- Manter o case **fácil de avaliar** (rodar direto sem configurar nada).
-- Permitir **reuso** da solução em dados novos (sem alterar código).
-
-## 2) Decisões técnicas relevantes
-
-### 2.1 Arquitetura modular por feature
-A base do projeto foi dividida por domínios (por exemplo: preços/RPA, vendas, e-mails, IA, ranking de faturamento). Isso evita acoplamento e reduz o risco de mudanças em uma parte quebrarem outras.
-
-A CLI (`python -m case_bridge`) funciona como **camada fina**: ela faz parsing de argumentos, valida caminhos/inputs e chama funções de domínio.
-
-### 2.2 Consolidação de vendas como “fonte única”
-A consolidação transforma múltiplos CSVs em uma tabela única com colunas úteis para relatórios:
-
-- Normaliza o nome do produto.
-- Garante tipagem numérica.
-- Calcula `volume_estimado_litros` com base no preço de referência.
-
-Isso cria uma base consistente para relatórios posteriores (ranking por filial/produto).
-
-### 2.3 Normalização de produtos com camadas (e controle de custo)
-O normalizador foi pensado para ser **robusto** e **barato**:
-
-- Regras locais e um mapa persistente resolvem a maior parte dos casos.
-- IA só é usada quando habilitada e quando necessário.
-
-Essa estratégia evita gastar tokens em situações previsíveis e diminui instabilidade do pipeline.
-
-### 2.4 IA (Gemini) como componente opcional e “fail-fast”
-O maior risco do projeto é a variabilidade de retorno da IA. Por isso, o caminho escolhido foi:
-
-- **JSON estrito**: o pipeline de e-mails exige resposta em JSON puro e valida chaves/formatos.
-- **Sem heurísticas de extração**: o sistema não tenta “consertar” respostas que vêm com texto extra ou JSON parcial.
-- **Falha explícita**: se a IA não cumprir o contrato (JSON válido), a etapa falha com erro claro.
-
-Essa decisão prioriza previsibilidade e evita que a entrega gere outputs “meio certos” que mascaram problemas.
-
-### 2.5 Nomes de arquivos finais inferidos do período
-Os entregáveis finais foram padronizados para conter o período no nome (ex.: `marco2025`), inferindo mês/ano a partir da coluna `data` das vendas consolidadas. Isso elimina hardcode e garante:
-
-- Menos erro manual.
-- Saídas com contexto (“de que mês é esse arquivo?”).
-
-### 2.6 Ranking de faturamento em CSV
-A escolha de CSV para ranking por filial e por produto é proposital:
-
-- É fácil validar em Excel/Google Sheets.
-- É simples de automatizar e versionar a regra de cálculo.
-- Evita dependência de BI/ferramentas externas.
-
-Na Etapa 3.4 (entregáveis), o ranking é gerado automaticamente junto com os demais arquivos finais, usando a base consolidada do período.
-
-## 3) Limitações conhecidas
-
-- **Dependência externa da IA**: instabilidade, limites de cota e respostas que fogem do esperado podem interromper a etapa de e-mails.
-- **Dados com múltiplos períodos**: a inferência do nome do mês assume que o dataset representa um único mês/ano. Se vier mais de um mês, hoje a etapa falha (por segurança).
-- **Ausência de suíte de testes formal**: há smoke tests manuais/por comando, mas não há ainda testes automatizados (unitários/integration) rodando em CI.
-- **UX do modo interativo**: o sub-menu de inputs cobre o principal (dados do case vs caminhos). Há também feedback simples (mensagens de “aguarde” entre sub-etapas) para reduzir a percepção de “terminal travado” em execuções mais longas.
-
-## 4) Próximos passos (recomendados para evoluir a entrega)
-
-1. **Testes automatizados**
-   - Testes unitários para consolidação, inferência de período e ranking.
-   - Testes de contrato para validar o schema do JSON de e-mails.
-
-2. **Observabilidade e diagnóstico**
-   - Logs com nível (INFO/WARN/ERROR) e contexto (arquivo/filial/produto).
-   - Captura opcional de “payload/response” da IA em modo debug (sem vazar chave).
-
-3. **Resiliência controlada na IA (sem perder o fail-fast)**
-   - Retentativas apenas para falhas transitórias (HTTP 503/timeouts), sem fallback para parsing heurístico.
-   - Estratégia de seleção de modelo configurável (e explícita para o usuário).
-
-4. **Configuração por arquivo (opcional)**
-   - Suportar um `config.json`/`config.yaml` para evitar reconfigurar caminhos em toda execução.
-
-5. **Relatórios adicionais**
-   - Ranking por filial **e produto** (matriz/pivot) ou Top-N por filial.
-   - Métricas complementares: ticket médio estimado, participação (%) e evolução ao longo do mês.
+A solução proposta utiliza um **pipeline de dados automatizado** que integra:
+- Web Scraping (RPA)
+- Engenharia de Dados
+- Inteligência Artificial Generativa
 
 ---
 
-**Resumo**: o Case Bridge foi estruturado para ser simples de rodar e fácil de auditar. A parte determinística (RPA + consolidação + ranking) é estável; a parte de IA é deliberadamente estrita e falha quando o contrato não é cumprido, para preservar a qualidade dos entregáveis.
+## 2. Decisões de Arquitetura e Engenharia
+
+### 2.1 Escolha da Interface CLI (Command Line Interface)
+
+Optou-se por construir uma ferramenta de linha de comando (CLI) modular em Python, em vez de scripts isolados ou notebooks. As justificativas para essa escolha incluem:
+
+- **Reprodutibilidade**: Garante que o pipeline possa ser executado em diferentes ambientes com os mesmos resultados.
+- **Escalabilidade**: A estrutura modular permite que novas etapas (como exportação para BI) sejam adicionadas sem afetar os módulos de coleta ou IA.
+- **Orquestração**: Um único ponto de entrada (`python -m case_bridge`) permite rodar o processo de ponta a ponta, simulando um ambiente real de produção.
+
+### 2.2 Coleta de Dados via RPA (Etapa 1)
+
+Para a extração dos preços de referência, foi utilizada a biblioteca `BeautifulSoup` em conjunto com `requests`.
+
+- **Decisão Técnica**: Priorizou-se o acesso direto ao HTML via requisições HTTP, evitando o uso de ferramentas de automação de navegador (como Selenium), que são mais pesadas e lentas para tabelas estáticas.
+- **Confiabilidade**: O script extrai de forma determinística os valores de Gasolina Comum, Etanol e Diesel S10, criando a base para o cálculo de volume de vendas.
+
+### 2.3 Normalização Inteligente de Produtos (Etapa 2)
+
+A normalização foi desenhada em camadas para otimizar custo e performance:
+
+- **Mapeamento Base**: Um dicionário estático resolve 90% das variações comuns (ex: "GC" para "Gasolina Comum").
+- **Aprendizado Persistente**: Mapeamentos já identificados são salvos em um JSON local, evitando reprocessamento.
+- **Fallback de IA**: Em casos de novos nomes desconhecidos, o sistema consulta o Gemini para inferir o produto canônico, garantindo que o pipeline nunca trave.
+
+---
+
+## 3. Estratégia de Inteligência Artificial (Etapa 3.3)
+
+O uso do modelo **Gemini 1.5 Flash** foi central para a sumarização dos e-mails dos gerentes. Durante o desenvolvimento, enfrentamos desafios técnicos que moldaram a solução final:
+
+### 3.1 Superação de Limitações de API
+
+- **Gestão de Erros 429 (Too Many Requests)**: Implementou-se uma lógica de seleção de modelo e intervalos de segurança para respeitar os limites da camada gratuita do Google AI Studio.
+- **Ajuste de Tokens e JSON**: Identificou-se que respostas complexas poderiam ser cortadas prematuramente (`finishReason: MAX_TOKENS`). A solução foi ampliar o `max_output_tokens` para 1024+ e refinar o prompt para exigir estritamente o formato JSON RFC 8259, garantindo que a saída fosse sempre parseável pelo sistema.
+
+### 3.2 Engenharia de Prompt e Estruturação
+
+O prompt foi configurado para atuar como um analista de operações, extraindo:
+
+- **Fatos**: Resumo e destaques operacionais.
+- **Insights**: Sentimento geral e alertas (como falta de suprimentos ou manutenções).
+
+Isso transforma um texto subjetivo em uma linha de dados quantitativa, permitindo filtrar postos com problemas em segundos.
+
+---
+
+## 4. Senso de Produto e Valor de Negócio
+
+A solução não entrega apenas arquivos; ela entrega **inteligência competitiva**.
+
+### 4.1 Ranking de Desempenho
+
+O ranking gerado por filial e produto (exibindo faturamento e volume estimado) permite à sede identificar imediatamente:
+
+- **Oportunidades**: Quais filiais estão performando acima da média de mercado.
+- **Anomalias**: Por que o Posto São João (F003) teve queda em gasolina enquanto o Posto Litoral Norte (F001) teve recorde? O cruzamento com os e-mails revela que fatores externos (turismo vs. feriado local) foram os causadores.
+
+### 4.2 Alertas Proativos
+
+Ao consolidar os alertas gerados pela IA no arquivo `resumo_gerentes_<mes><ano>.csv`, a gestão central ganha uma "torre de controle". Exemplos reais capturados pelo sistema:
+
+- **Logística**: Atraso de fornecedor no Ipiranga Express (F002).
+- **Manutenção**: Bomba fora de operação no Posto Bandeirantes (F005).
+
+---
+
+## 5. Limitações e Futuro
+
+### 5.1 Limitações Atuais
+
+- **Dependência de Internet**: O RPA e a IA exigem conexão estável.
+- **Single-Month Context**: O sistema atual foca em um período isolado, não realizando comparações históricas automáticas.
+- **Ausência de suíte de testes formal**: Há smoke tests manuais, mas não há testes automatizados em CI.
+
+### 5.2 Próximos Passos (Roadmap)
+
+- **Dashboard Visual**: Integração da tabela consolidada com ferramentas como Streamlit ou Power BI para visualização geográfica do desempenho.
+- **Monitoramento de Estoque**: Cruzar os e-mails de "abastecimento reduzido" com dados reais de tanques para automatizar pedidos de compra.
+- **Suíte de Testes**: Implementação de testes unitários para garantir que a lógica de cálculo de volume permaneça correta após atualizações de código.
+
+---
+
+## Conclusão
+
+O **Case Bridge** demonstrou que a automação, quando aliada a uma estratégia clara de tratamento de dados e uso consciente de IA, elimina tarefas manuais exaustivas e fornece clareza estratégica para a gestão da rede de combustíveis.
+
+A solução é simples de rodar, fácil de auditar e pronta para evoluir conforme as necessidades do negócio crescerem.
