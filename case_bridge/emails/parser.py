@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+import unicodedata
+
 
 @dataclass(frozen=True)
 class Email:
@@ -15,6 +17,25 @@ class Email:
     corpo: str
     raw: str
     filial_nome: str
+
+
+def _norm_filial_nome(nome: str) -> str:
+    nome = unicodedata.normalize("NFKD", str(nome))
+    nome = "".join(ch for ch in nome if not unicodedata.combining(ch))
+    nome = nome.casefold()
+    nome = re.sub(r"\s+", " ", nome).strip()
+    return nome
+
+
+# Mapeamento canônico do case: nome do posto -> filial_id.
+# (Os arquivos do case podem vir com F00X trocado no filename; o conteúdo do e-mail é a fonte de verdade.)
+_CANONICAL_ID_BY_FILIAL_NOME: dict[str, str] = {
+    _norm_filial_nome("Posto Litoral Norte"): "F001",
+    _norm_filial_nome("Posto Ipiranga Express"): "F002",
+    _norm_filial_nome("Posto São João"): "F003",
+    _norm_filial_nome("Auto Posto Central"): "F004",
+    _norm_filial_nome("Posto Bandeirantes"): "F005",
+}
 
 
 def _inferir_filial_id(path: Path) -> str:
@@ -109,12 +130,15 @@ def parse_email_txt(path: Path) -> Email:
         body_lines.append(line)
 
     corpo = "\n".join(body_lines).strip()
-    filial_id = _inferir_filial_id(path)
+    filial_id_from_filename = _inferir_filial_id(path)
     filial_nome = inferir_filial_nome(
         assunto=headers.get("assunto"),
         corpo=corpo,
-        filial_id=filial_id,
+        filial_id=filial_id_from_filename,
     )
+
+    # Corrige ID quando o nome do posto é conhecido (fonte de verdade do case).
+    filial_id = _CANONICAL_ID_BY_FILIAL_NOME.get(_norm_filial_nome(filial_nome), filial_id_from_filename)
 
     return Email(
         path=path,

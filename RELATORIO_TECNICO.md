@@ -22,6 +22,11 @@ A decisão por CLI (ao invés de scripts isolados ou notebook) vem do objetivo d
 - Ajuda a demonstrar “produto” e não apenas “código”.
 - Permite tanto automação (por argumentos) quanto uso guiado (menu interativo).
 
+Além disso, a CLI foi desenhada para dois estilos de uso:
+
+- **Rodar etapa por etapa** (bom para validar outputs intermediários e debugar).
+- **Rodar tudo de uma vez** no final (Etapa 3.4), gerando os entregáveis do mês em um único comando.
+
 ### Dados do case vs. dados externos
 O projeto assume por padrão os dados do case em `data/case`, mas também permite o usuário informar caminhos de arquivos/diretórios no modo interativo. A motivação foi:
 
@@ -74,12 +79,14 @@ A escolha de CSV para ranking por filial e por produto é proposital:
 - É simples de automatizar e versionar a regra de cálculo.
 - Evita dependência de BI/ferramentas externas.
 
+Na Etapa 3.4 (entregáveis), o ranking é gerado automaticamente junto com os demais arquivos finais, usando a base consolidada do período.
+
 ## 3) Limitações conhecidas
 
 - **Dependência externa da IA**: instabilidade, limites de cota e respostas que fogem do esperado podem interromper a etapa de e-mails.
 - **Dados com múltiplos períodos**: a inferência do nome do mês assume que o dataset representa um único mês/ano. Se vier mais de um mês, hoje a etapa falha (por segurança).
 - **Ausência de suíte de testes formal**: há smoke tests manuais/por comando, mas não há ainda testes automatizados (unitários/integration) rodando em CI.
-- **UX do modo interativo**: o sub-menu de inputs cobre o principal (dados do case vs caminhos), mas pode ser expandido (ex.: validação mais amigável, re-seleção sem reiniciar).
+- **UX do modo interativo**: o sub-menu de inputs cobre o principal (dados do case vs caminhos). Há também feedback simples (mensagens de “aguarde” entre sub-etapas) para reduzir a percepção de “terminal travado” em execuções mais longas.
 
 ## 4) Próximos passos (recomendados para evoluir a entrega)
 

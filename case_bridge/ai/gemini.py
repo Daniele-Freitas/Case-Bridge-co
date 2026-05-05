@@ -18,7 +18,6 @@ _LAST_REQUEST_AT_S = 0.0
 @dataclass
 class GeminiOptions:
     base_url: str = "https://generativelanguage.googleapis.com/v1beta"
-    # Mantido apenas por compatibilidade com a CLI (argumento --ai-model).
     # O projeto usa um único modelo fixo para reduzir variabilidade.
     model: str = "gemini-2.5-flash"
     api_key_env: str = "GEMINI_API_KEY"
@@ -147,6 +146,95 @@ def _extract_text(data: dict) -> str | None:
     return "\n".join(texts)
 
 
+def _extract_finish_reason(data: dict) -> str | None:
+    try:
+        candidates = data.get("candidates")
+        if not isinstance(candidates, list) or not candidates:
+            return None
+        c0 = candidates[0]
+        if not isinstance(c0, dict):
+            return None
+        fr = c0.get("finishReason")
+        if isinstance(fr, str) and fr.strip():
+            return fr.strip()
+    except Exception:
+        return None
+    return None
+
+
+def _extract_usage_counts(data: dict) -> tuple[int | None, int | None, int | None]:
+    """Return (promptTokenCount, candidatesTokenCount, thoughtsTokenCount) when available."""
+    try:
+        usage = data.get("usageMetadata")
+        if not isinstance(usage, dict):
+            return (None, None, None)
+        pt = usage.get("promptTokenCount")
+        ct = usage.get("candidatesTokenCount")
+        tt = usage.get("thoughtsTokenCount")
+        return (
+            int(pt) if isinstance(pt, int) else None,
+            int(ct) if isinstance(ct, int) else None,
+            int(tt) if isinstance(tt, int) else None,
+        )
+    except Exception:
+        return (None, None, None)
+
+
+def _raise_for_non_200(*, resp: requests.Response, model: str) -> None:
+    if resp.status_code == 200:
+        return
+
+    if resp.status_code == 429:
+        msg = _extract_api_error_message(resp)
+        if "limit: 0" in msg or "limit: 0" in (resp.text or ""):
+            raise GeminiError(
+                "Falha ao chamar Gemini (HTTP 429): sua quota para este modelo/projeto parece ser 0 (limit: 0). "
+                "Isso normalmente é configuração/plano/billing da conta (não é bug do código). "
+                "Verifique rate limits/quota no console do Gemini e se sua chave tem acesso ao modelo."
+            )
+        raise GeminiError(
+            "Falha ao chamar Gemini (HTTP 429): rate limit/quota excedida. "
+            "Tente novamente mais tarde ou reduza volume de chamadas (menos e-mails por execução)."
+        )
+
+    raise GeminiError(
+        f"Falha ao chamar Gemini (modelo {model}, HTTP {resp.status_code}): {resp.text[:500]}"
+    )
+
+
+def _parse_json_text(
+    *,
+    text: str,
+    model: str,
+    finish_reason: str | None,
+    max_output_tokens: int,
+    prompt_preview: str,
+    prompt_tokens: int | None,
+    candidate_tokens: int | None,
+    thoughts_tokens: int | None,
+) -> dict[str, Any]:
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as exc:
+        if finish_reason == "MAX_TOKENS":
+            raise GeminiError(
+                "Gemini retornou uma resposta truncada (finishReason=MAX_TOKENS), então o JSON ficou incompleto. "
+                f"Aumente max_output_tokens (atual={max_output_tokens}) ou reduza o tamanho do prompt/entrada. "
+                f"tokens: prompt={prompt_tokens}, output={candidate_tokens}, thoughts={thoughts_tokens}. "
+                f"resposta_inicial={text[:200]!r}"
+            ) from exc
+        raise GeminiError(
+            "Gemini respondeu, mas o JSON é inválido "
+            f"(modelo {model}; finishReason={finish_reason}; max_output_tokens={max_output_tokens}; "
+            f"tokens: prompt={prompt_tokens}, output={candidate_tokens}, thoughts={thoughts_tokens}). "
+            f"prompt_inicial={prompt_preview!r} resposta_inicial={text[:200]!r}. erro={str(exc)}"
+        ) from exc
+
+    if not isinstance(obj, dict):
+        raise GeminiError(f"Gemini respondeu JSON, mas não é um objeto (modelo {model}).")
+    return obj
+
+
 def _debug_candidate(data: dict) -> str:
     try:
         candidates = data.get("candidates")
@@ -173,84 +261,56 @@ def generate_json(
     *,
     prompt: str,
     opts: GeminiOptions,
-    max_output_tokens: int = 512,
+    max_output_tokens: int = 4096,
     temperature: float = 0.0,
     force_json: bool = True,
-    strict_json: bool = True,
     tools: list[dict] | None = None,
     tool_config: dict | None = None,
 ) -> dict[str, Any]:
     api_key = _get_api_key(opts)
     base_url = opts.base_url.rstrip("/")
 
-    model_name = _resolve_model_name()
+    model = _resolve_model_name()
+    payload = _build_payload(
+        prompt=prompt,
+        max_output_tokens=max_output_tokens,
+        temperature=temperature,
+        force_json=force_json,
+        tools=tools,
+        tool_config=tool_config,
+    )
+    url = base_url + f"/{model}:generateContent"
+    resp = _post_generate_content(
+        url,
+        api_key=api_key,
+        payload=payload,
+        timeout_s=opts.timeout_s,
+        min_interval_s=float(getattr(opts, "min_interval_s", 0.0) or 0.0),
+    )
+    _raise_for_non_200(resp=resp, model=model)
 
-    def call(model: str, *, allow_force_json: bool, allow_tools: bool) -> dict[str, Any]:
-        payload = _build_payload(
-            prompt=prompt,
-            max_output_tokens=max_output_tokens,
-            temperature=temperature,
-            force_json=force_json and allow_force_json,
-            tools=tools if allow_tools else None,
-            tool_config=tool_config if allow_tools else None,
-        )
-        url = base_url + f"/{model}:generateContent"
-        resp = _post_generate_content(
-            url,
-            api_key=api_key,
-            payload=payload,
-            timeout_s=opts.timeout_s,
-            min_interval_s=float(getattr(opts, "min_interval_s", 0.0) or 0.0),
-        )
+    data = resp.json()
 
-        if resp.status_code != 200:
-            if resp.status_code == 429:
-                msg = _extract_api_error_message(resp)
-                if "limit: 0" in msg or "limit: 0" in (resp.text or ""):
-                    raise GeminiError(
-                        "Falha ao chamar Gemini (HTTP 429): sua quota para este modelo/projeto parece ser 0 (limit: 0). "
-                        "Isso normalmente é configuração/plano/billing da conta (não é bug do código). "
-                        "Verifique rate limits/quota no console do Gemini e se sua chave tem acesso ao modelo."
-                    )
-                raise GeminiError(
-                    "Falha ao chamar Gemini (HTTP 429): rate limit/quota excedida. "
-                    "Tente novamente mais tarde ou reduza volume de chamadas (menos e-mails por execução)."
-                )
-            raise GeminiError(
-                f"Falha ao chamar Gemini (modelo {model}, HTTP {resp.status_code}): {resp.text[:500]}"
-            )
+    # Se function-calling estiver habilitado, preferimos os args estruturados.
+    args = _extract_function_call_args(data) if tools else None
+    if isinstance(args, dict):
+        return args
 
-        data = resp.json()
+    text = _extract_text(data)
+    if not isinstance(text, str):
+        dbg = _debug_candidate(data)
+        raise GeminiError(f"Gemini não retornou texto/args parseáveis (modelo {model}; {dbg}).")
 
-        if allow_tools:
-            args = _extract_function_call_args(data)
-            if isinstance(args, dict):
-                return args
+    finish_reason = _extract_finish_reason(data)
+    prompt_tokens, candidate_tokens, thoughts_tokens = _extract_usage_counts(data)
 
-        text = _extract_text(data)
-        if not isinstance(text, str):
-            dbg = _debug_candidate(data)
-            raise GeminiError(f"Gemini não retornou texto/args parseáveis (modelo {model}; {dbg}).")
-
-        if strict_json:
-            try:
-                obj = json.loads(text)
-            except json.JSONDecodeError as exc:
-                raise GeminiError(
-                    f"Gemini respondeu, mas o JSON é inválido (modelo {model}): {str(exc)}"
-                ) from exc
-            if not isinstance(obj, dict):
-                raise GeminiError(f"Gemini respondeu JSON, mas não é um objeto (modelo {model}).")
-            return obj
-
-        try:
-            obj = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise GeminiError(
-                f"Gemini respondeu, mas não retornou JSON parseável (modelo {model}): {str(exc)}"
-            ) from exc
-        if not isinstance(obj, dict):
-            raise GeminiError(f"Gemini respondeu JSON, mas não é um objeto (modelo {model}).")
-        return obj
-
-    return call(model_name, allow_force_json=True, allow_tools=True)
+    return _parse_json_text(
+        text=text,
+        model=model,
+        finish_reason=finish_reason,
+        max_output_tokens=max_output_tokens,
+        prompt_preview=prompt[:200],
+        prompt_tokens=prompt_tokens,
+        candidate_tokens=candidate_tokens,
+        thoughts_tokens=thoughts_tokens,
+    )

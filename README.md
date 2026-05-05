@@ -5,8 +5,8 @@ Este repositório implementa o fluxo completo do case:
 - **Etapa 1 (RPA):** extrai preços de referência e gera `precos_referencia.csv`.
 - **Etapa 2 (Vendas):** consolida CSVs, normaliza produtos e calcula `volume_estimado_litros`.
 - **Etapa 3.3 (E-mails):** resume e-mails com IA (Gemini) em JSON estruturado.
-- **Etapa 3.4 (Entregáveis):** gera automaticamente os dois CSVs finais dentro de `out/`.
 - **Ranking de faturamento:** gera tabelas (CSV) por filial e por produto.
+- **Etapa 3.4 (Entregáveis / tudo de uma vez):** executa o pipeline final e gera **todos os arquivos de saída** em `out/`.
 
 ## Estrutura de dados
 
@@ -91,6 +91,11 @@ Ao iniciar, o modo interativo pergunta se você quer:
 
 **Nota:** A CLI não pede nenhuma entrada durante a execução. Se uma etapa precisar da `GEMINI_API_KEY`, ela deve estar **já definida no terminal antes** de rodar o comando.
 
+Você pode:
+
+- Rodar **cada etapa separadamente** (1, 2, 3.3 e ranking), ou
+- Rodar **tudo de uma vez** no final (`entregaveis`, Etapa 3.4).
+
 ## Como rodar (modo por argumentos)
 
 ### Etapa 1 — preços de referência
@@ -121,6 +126,8 @@ Gera:
 
 - `out/vendas_consolidadas_<mes><ano>.csv` (ex.: `vendas_consolidadas_marco2025.csv`)
 - `out/resumo_gerentes_<mes><ano>.csv` (ex.: `resumo_gerentes_marco2025.csv`)
+- `out/ranking_faturamento_por_filial_<mes><ano>.csv`
+- `out/ranking_faturamento_por_produto_<mes><ano>.csv`
 
 ```powershell
 \.venv\Scripts\python.exe -m case_bridge entregaveis

@@ -4,6 +4,7 @@ import argparse
 import os
 import re
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -50,6 +51,12 @@ def _collect_files(*, files: list[str] | None, dir_path: str, glob: str) -> list
 
 def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _pause_between_steps(*, seconds: float = 0.6) -> None:
+    """Pequena pausa para dar feedback de progresso no terminal."""
+    if seconds and seconds > 0:
+        time.sleep(seconds)
 
 
 def _infer_period_label_from_vendas_df(df_vendas: pd.DataFrame) -> str:
@@ -286,6 +293,8 @@ def cmd_entregaveis(args: argparse.Namespace) -> int:
     # 1) Garantir preços (gera apenas se não existir)
     precos_path = Path(args.precos)
     if not precos_path.exists():
+        print("INFO: iniciando Etapa 1 (preços). Aguarde...")
+        _pause_between_steps()
         print(f"INFO: {precos_path} não existe; gerando via RPA...")
         df_precos = extrair_precos_referencia(
             args.url,
@@ -294,8 +303,13 @@ def cmd_entregaveis(args: argparse.Namespace) -> int:
         )
         df_precos.to_csv(precos_path, index=False)
         print(f"OK [Etapa 1]: {len(df_precos)} linhas salvas em {precos_path}")
+    else:
+        print("INFO: Etapa 1 (preços): já existe. Seguindo...")
+        _pause_between_steps(seconds=0.4)
 
     # 2) Consolidar vendas (Etapa 2) -> nome fixo
+    print("INFO: iniciando Etapa 2 (consolidar vendas). Aguarde...")
+    _pause_between_steps()
     vendas_files = _collect_files(
         files=args.vendas,
         dir_path=args.vendas_dir,
@@ -309,7 +323,21 @@ def cmd_entregaveis(args: argparse.Namespace) -> int:
     df_vendas.to_csv(vendas_out, index=False)
     print(f"OK [Etapa 3.4 - Vendas]: {len(df_vendas)} linhas salvas em {vendas_out}")
 
+    # 2.1) Ranking de faturamento (a partir da base consolidada)
+    print("INFO: gerando ranking de faturamento (por filial e por produto). Aguarde...")
+    _pause_between_steps()
+    df_filial = ranking_faturamento_por_filial(df_vendas)
+    df_produto = ranking_faturamento_por_produto(df_vendas)
+    out_filial = out_dir / f"ranking_faturamento_por_filial_{periodo}.csv"
+    out_produto = out_dir / f"ranking_faturamento_por_produto_{periodo}.csv"
+    df_filial.to_csv(out_filial, index=False)
+    df_produto.to_csv(out_produto, index=False)
+    print(f"OK [Etapa 3.4 - Ranking (filial)]: {len(df_filial)} linhas salvas em {out_filial}")
+    print(f"OK [Etapa 3.4 - Ranking (produto)]: {len(df_produto)} linhas salvas em {out_produto}")
+
     # 3) Resumir e-mails (Etapa 3.3) -> nome fixo
+    print("INFO: iniciando Etapa 3.3 (resumir e-mails com Gemini). Aguarde...")
+    _pause_between_steps()
     email_files = _collect_files(
         files=args.emails,
         dir_path=args.emails_dir,
@@ -493,7 +521,10 @@ def _build_parser() -> argparse.ArgumentParser:
     # entregaveis
     p_ent = sub.add_parser(
         "entregaveis",
-        help="Etapa 3.4: gera os 2 CSVs finais em out/ (vendas_consolidadas_marco2025.csv e resumo_gerentes_marco2025.csv)",
+        help=(
+            "Etapa 3.4 (tudo de uma vez): gera entregáveis finais em out/ "
+            "(vendas_consolidadas_<mes><ano>.csv, resumo_gerentes_<mes><ano>.csv e rankings de faturamento)"
+        ),
     )
     p_ent.add_argument(
         "--precos",
@@ -588,11 +619,12 @@ def interactive_menu() -> int:
 
     while True:
         print("\nCase Bridge")
-        print("1) Etapa 1: gerar precos_referencia.csv")
-        print("2) Etapa 2: consolidar vendas (out/) ")
-        print("3) Etapa 3.3: resumir e-mails (out/) [requer GEMINI_API_KEY]")
-        print("4) Etapa 3.4: gerar entregáveis finais (out/) [requer GEMINI_API_KEY]")
-        print("5) Ranking de faturamento (out/)")
+        print("Dica: você pode rodar cada etapa separadamente, ou gerar tudo de uma vez no final (Etapa 3.4).")
+        print("1) Etapa 1 — Preços: gera precos_referencia.csv (RPA)")
+        print("2) Etapa 2 — Vendas: consolida CSVs e salva em out/")
+        print("3) Etapa 3.3 — E-mails: resume e-mails e salva em out/ (requer GEMINI_API_KEY)")
+        print("4) Ranking de faturamento: gera CSVs por filial e por produto em out/")
+        print("5) Etapa 3.4 — Tudo de uma vez (entregáveis): gera vendas + ranking + e-mails finais em out/ (requer GEMINI_API_KEY)")
         print("0) Sair")
 
         choice = input("Escolha: ").strip()
@@ -617,6 +649,13 @@ def interactive_menu() -> int:
             else:
                 argv += ["--emails-dir", str(inputs["emails_dir"])]
         elif choice == "4":
+            argv = ["faturamento", "--precos", str(inputs["precos"])]
+            vendas = list(inputs.get("vendas", []))
+            if vendas:
+                argv += ["--vendas", *vendas]
+            else:
+                argv += ["--vendas-dir", str(inputs["vendas_dir"])]
+        elif choice == "5":
             argv = ["entregaveis", "--precos", str(inputs["precos"])]
             vendas = list(inputs.get("vendas", []))
             if vendas:
@@ -629,19 +668,14 @@ def interactive_menu() -> int:
                 argv += ["--emails", *emails]
             else:
                 argv += ["--emails-dir", str(inputs["emails_dir"])]
-        elif choice == "5":
-            argv = ["faturamento", "--precos", str(inputs["precos"])]
-            vendas = list(inputs.get("vendas", []))
-            if vendas:
-                argv += ["--vendas", *vendas]
-            else:
-                argv += ["--vendas-dir", str(inputs["vendas_dir"])]
         else:
             print("Opção inválida.")
             continue
 
         try:
             args = parser.parse_args(argv)
+            print("INFO: executando. Se parecer parado, aguarde a próxima mensagem...")
+            _pause_between_steps(seconds=0.4)
             code = args.func(args)
             if code != 0:
                 print(f"INFO: comando finalizou com código {code}.")
